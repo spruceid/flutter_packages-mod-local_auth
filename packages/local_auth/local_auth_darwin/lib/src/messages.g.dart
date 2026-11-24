@@ -487,4 +487,29 @@ class LocalAuthApi {
     )
     ;
   }
+
+  /// Handles a biometric baseline left in UserDefaults by older versions.
+  ///
+  /// If there is a legacy value and no keychain baseline yet, the legacy value
+  /// is moved into the keychain when [trusted] is true (the app has evidence
+  /// this device ran the app before), and discarded otherwise. Returns a short
+  /// description of what happened, for logging.
+  Future<String> migrateLegacyBiometricBaseline(bool trusted) async {
+    final pigeonVar_channelName = 'dev.flutter.pigeon.local_auth_darwin.LocalAuthApi.migrateLegacyBiometricBaseline$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[trusted]);
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+        pigeonVar_replyList,
+        pigeonVar_channelName,
+        isNullValid: false,
+    )
+    ;
+    return pigeonVar_replyValue! as String;
+  }
 }

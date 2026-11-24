@@ -67,40 +67,171 @@ public final class LocalAuthPlugin: NSObject, FlutterPlugin, LocalAuthApi, @unch
   }
 
   // MARK: LocalAuthApi
-    func clearBiometricChecking() throws {
-        UserDefaults.standard.removeObject(forKey: BIOMETRIC_CHECK_KEY)
+
+  func clearBiometricChecking() throws {
+    // Remove both the keychain baseline and any legacy UserDefaults value, so
+    // the next successful biometric auth records a fresh baseline.
+    // Never throws: callers use this on paths (e.g. after a passed
+    // rechallenge) where an error must not block the rest of the flow.
+    let status = deleteKeychainBaseline()
+    UserDefaults.standard.removeObject(forKey: BIOMETRIC_CHECK_KEY)
+    if status != errSecSuccess && status != errSecItemNotFound {
+      NSLog("local_auth: failed to delete biometric baseline from keychain (OSStatus %d)", status)
     }
-    
-    private let BIOMETRIC_CHECK_KEY = "check-biometrics"
-    
-    private func base64UrlSafe(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+  }
+
+  func migrateLegacyBiometricBaseline(trusted: Bool) throws -> String {
+    // Only acts when the keychain has no baseline yet and an older build left
+    // one in UserDefaults. UserDefaults is copied to new devices by backups and
+    // Quick Start, so the legacy value is only carried over when the app says
+    // this device has run the app before (`trusted`); otherwise it is dropped.
+    //
+    // Returns what happened, for the app's logs: "noLegacyValue",
+    // "keychainAlreadySet", "moved" or "discarded".
+    guard let legacy = UserDefaults.standard.string(forKey: BIOMETRIC_CHECK_KEY) else {
+      return "noLegacyValue"
     }
-    
-    private func getBiometricState() -> String? {
-        let context = LAContext()
-        var error: NSError?
-        context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
-        guard error == nil else { return nil }
-        guard let domainState = context.evaluatedPolicyDomainState else { return nil }
-        return base64UrlSafe(domainState)
-    }
-    
-    private func compareBiometricState() -> Bool {
-        guard let current = getBiometricState() else {
-            return false
+    switch readKeychainBaseline() {
+    case .found:
+      // Keychain already authoritative. Drop the stale legacy copy.
+      UserDefaults.standard.removeObject(forKey: BIOMETRIC_CHECK_KEY)
+      return "keychainAlreadySet"
+    case .notFound:
+      // Remove the legacy value whatever happens below; it is never compared
+      // against directly.
+      UserDefaults.standard.removeObject(forKey: BIOMETRIC_CHECK_KEY)
+      if trusted {
+        let status = writeKeychainBaseline(legacy)
+        if status != errSecSuccess {
+          // The next successful auth records a fresh baseline instead.
+          throw PigeonError(
+            code: "keychain_error",
+            message: "Failed to move legacy biometric baseline into keychain",
+            details: "OSStatus \(status)")
         }
-        
-        guard let previous = UserDefaults.standard.string(forKey: BIOMETRIC_CHECK_KEY) else {
-            UserDefaults.standard.set(current, forKey: BIOMETRIC_CHECK_KEY)
-            return true
-        }
-        
-        return current == previous
+        return "moved"
+      }
+      return "discarded"
+    case .error(let status):
+      // Leave everything as is; compareBiometricState fails safe on read errors.
+      throw PigeonError(
+        code: "keychain_error",
+        message: "Failed to read biometric baseline from keychain",
+        details: "OSStatus \(status)")
     }
+  }
+
+  /// Key used for the legacy UserDefaults value and the keychain account.
+  private let BIOMETRIC_CHECK_KEY = "check-biometrics"
+
+  /// Keychain service for the biometric baseline item.
+  private let BIOMETRIC_CHECK_SERVICE = "io.flutter.plugins.localauth.biometric-check"
+
+  private enum KeychainRead {
+    case found(String)
+    case notFound
+    case error(OSStatus)
+  }
+
+  /// Base query for the baseline item. Deliberately not synchronizable, so
+  /// iCloud Keychain never copies it to another device.
+  private func keychainBaseQuery() -> [CFString: Any] {
+    return [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: BIOMETRIC_CHECK_SERVICE,
+      kSecAttrAccount: BIOMETRIC_CHECK_KEY,
+    ]
+  }
+
+  private func readKeychainBaseline() -> KeychainRead {
+    var query = keychainBaseQuery()
+    query[kSecReturnData] = true
+    query[kSecMatchLimit] = kSecMatchLimitOne
+    var ref: AnyObject?
+    let status = SecItemCopyMatching(query as CFDictionary, &ref)
+    if status == errSecItemNotFound {
+      return .notFound
+    }
+    guard status == errSecSuccess else {
+      return .error(status)
+    }
+    guard let data = ref as? Data, let value = String(data: data, encoding: .utf8) else {
+      return .error(errSecDecode)
+    }
+    return .found(value)
+  }
+
+  private func writeKeychainBaseline(_ value: String) -> OSStatus {
+    let data = Data(value.utf8)
+    var addQuery = keychainBaseQuery()
+    addQuery[kSecValueData] = data
+    // Readable after the first unlock since boot, never migrated to another
+    // device, and (unlike WhenPasscodeSet*) not deleted if the passcode is
+    // removed — passcode removal resets Face ID / Touch ID, and that reset
+    // must still be detected.
+    addQuery[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    let status = SecItemAdd(addQuery as CFDictionary, nil)
+    if status == errSecDuplicateItem {
+      let update: [CFString: Any] = [kSecValueData: data]
+      return SecItemUpdate(keychainBaseQuery() as CFDictionary, update as CFDictionary)
+    }
+    return status
+  }
+
+  @discardableResult
+  private func deleteKeychainBaseline() -> OSStatus {
+    return SecItemDelete(keychainBaseQuery() as CFDictionary)
+  }
+
+  private func base64UrlSafe(_ data: Data) -> String {
+    data.base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
+  }
+
+  private func getBiometricState() -> String? {
+    let context = LAContext()
+    var error: NSError?
+    context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+    guard error == nil else { return nil }
+    guard let domainState = context.evaluatedPolicyDomainState else { return nil }
+    return base64UrlSafe(domainState)
+  }
+
+  /// Returns true if the enrolled biometrics match the stored baseline.
+  ///
+  /// The baseline lives in the keychain (device-only). A missing baseline is
+  /// trust-on-first-use: the current state is recorded and treated as valid.
+  /// Any keychain read failure other than "not found" returns false, so a
+  /// keychain problem can never silently overwrite the baseline and hide a
+  /// biometric change.
+  private func compareBiometricState() -> Bool {
+    guard let current = getBiometricState() else {
+      return false
+    }
+
+    // Never compare against a legacy UserDefaults value: it may have been
+    // restored from another device. The app normally removes it through
+    // migrateLegacyBiometricBaseline before authenticating.
+    if UserDefaults.standard.object(forKey: BIOMETRIC_CHECK_KEY) != nil {
+      UserDefaults.standard.removeObject(forKey: BIOMETRIC_CHECK_KEY)
+    }
+
+    switch readKeychainBaseline() {
+    case .found(let previous):
+      return current == previous
+    case .notFound:
+      let status = writeKeychainBaseline(current)
+      if status != errSecSuccess {
+        NSLog("local_auth: failed to store biometric baseline in keychain (OSStatus %d)", status)
+      }
+      return true
+    case .error(let status):
+      NSLog("local_auth: failed to read biometric baseline from keychain (OSStatus %d)", status)
+      return false
+    }
+  }
 
   func authenticate(
     options: AuthOptions,

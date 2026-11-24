@@ -121,6 +121,11 @@ abstract class LocalAuthApi {
 
   /// Returns the biometric modalities the device's hardware has, whether or not
   /// any biometrics are currently enrolled.
+  ///
+  /// Unlike [getEnrolledBiometrics] this reflects the physical sensor, so it
+  /// reports e.g. [AuthBiometric.face] on a Face ID device even before the user
+  /// has set up Face ID. (Apple biometrics are always Secure Enclave-backed, so
+  /// there is no weak/strong distinction to report on iOS.)
   List<AuthBiometric> getHardwareBiometricCapabilities();
 
   /// Attempts to authenticate the user with the provided [options], and using
@@ -130,4 +135,12 @@ abstract class LocalAuthApi {
 
   /// Clear biometric checking variables
   void clearBiometricChecking();
+
+  /// Handles a biometric baseline left in UserDefaults by older versions.
+  ///
+  /// If there is a legacy value and no keychain baseline yet, the legacy value
+  /// is moved into the keychain when [trusted] is true (the app has evidence
+  /// this device ran the app before), and discarded otherwise. Returns a short
+  /// description of what happened, for logging.
+  String migrateLegacyBiometricBaseline(bool trusted);
 }
