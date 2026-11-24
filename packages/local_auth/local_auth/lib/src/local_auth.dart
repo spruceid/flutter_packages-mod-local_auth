@@ -103,4 +103,16 @@ class LocalAuthentication {
 
   Future<void> clearBiometricChecking() =>
       LocalAuthPlatform.instance.clearBiometricChecking();
+
+  /// Handles a biometric baseline left by an older plugin version in a
+  /// location that can be copied to other devices (iOS: UserDefaults).
+  ///
+  /// Call before [authenticate] with `checkBiometricInvalidationForKey`. Pass
+  /// [trusted] = true only when the app has device-only evidence that this
+  /// device ran the app before; otherwise the old baseline is discarded.
+  /// Returns a short description of what happened, or null where there is
+  /// nothing to migrate (Android, Windows).
+  Future<String?> migrateLegacyBiometricBaseline({required bool trusted}) =>
+      LocalAuthPlatform.instance
+          .migrateLegacyBiometricBaseline(trusted: trusted);
 }

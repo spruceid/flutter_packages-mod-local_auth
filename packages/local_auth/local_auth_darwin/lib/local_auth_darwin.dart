@@ -152,6 +152,13 @@ class LocalAuthDarwin extends LocalAuthPlatform {
     return _api.clearBiometricChecking();
   }
 
+  @override
+  Future<String?> migrateLegacyBiometricBaseline({
+    required bool trusted,
+  }) async {
+    return _api.migrateLegacyBiometricBaseline(trusted);
+  }
+
   AuthStrings _pigeonStringsFromiOSAuthMessages(
     String localizedReason,
     Iterable<AuthMessages> messagesList,

@@ -437,6 +437,13 @@ protocol LocalAuthApi {
   func authenticate(options: AuthOptions, strings: AuthStrings, completion: @escaping (Result<AuthResultDetails, Error>) -> Void)
   /// Clear biometric checking variables
   func clearBiometricChecking() throws
+  /// Handles a biometric baseline left in UserDefaults by older versions.
+  ///
+  /// If there is a legacy value and no keychain baseline yet, the legacy value
+  /// is moved into the keychain when [trusted] is true (the app has evidence
+  /// this device ran the app before), and discarded otherwise. Returns a short
+  /// description of what happened, for logging.
+  func migrateLegacyBiometricBaseline(trusted: Bool) throws -> String
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -542,6 +549,27 @@ class LocalAuthApiSetup {
       }
     } else {
       clearBiometricCheckingChannel.setMessageHandler(nil)
+    }
+    /// Handles a biometric baseline left in UserDefaults by older versions.
+    ///
+    /// If there is a legacy value and no keychain baseline yet, the legacy value
+    /// is moved into the keychain when [trusted] is true (the app has evidence
+    /// this device ran the app before), and discarded otherwise. Returns a short
+    /// description of what happened, for logging.
+    let migrateLegacyBiometricBaselineChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.local_auth_darwin.LocalAuthApi.migrateLegacyBiometricBaseline\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      migrateLegacyBiometricBaselineChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let trustedArg = args[0] as! Bool
+        do {
+          let result = try api.migrateLegacyBiometricBaseline(trusted: trustedArg)
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      migrateLegacyBiometricBaselineChannel.setMessageHandler(nil)
     }
   }
 }

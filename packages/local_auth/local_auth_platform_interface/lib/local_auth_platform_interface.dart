@@ -114,4 +114,19 @@ abstract class LocalAuthPlatform extends PlatformInterface {
       'clearBiometricChecking() has not been implemented.',
     );
   }
+
+  /// Handles a biometric baseline stored in an older, non device-only
+  /// location by a previous version of the plugin.
+  ///
+  /// [trusted] says whether the app has evidence this device ran the app
+  /// before; only then is the old baseline kept. Returns a short description
+  /// of what happened, or null on platforms where there is nothing to migrate.
+  ///
+  /// The default is a no-op, so only platforms that stored a legacy baseline
+  /// (iOS/macOS) need to implement it.
+  Future<String?> migrateLegacyBiometricBaseline({
+    required bool trusted,
+  }) async {
+    return null;
+  }
 }
